@@ -231,7 +231,7 @@ server.tool(
   {
     name: "build-taste-itinerary",
     description:
-      "Compose a time-aware taste itinerary for a city — morning coffee, afternoon snack, dinner, and late bites — with cultural context explaining why each dish represents the city. Use this when the user wants a full day food plan.",
+      "Compose a time-aware taste itinerary for a city — morning coffee, afternoon snack, dinner, and late bites — with cultural context explaining why each dish represents the city. Includes an interactive route map. Use this when the user wants a full day food plan.",
     schema: z.object({
       city: z.string().describe("The city to build the itinerary for"),
       preferences: z.string().optional().describe("Optional dietary preferences or interests, e.g. 'vegetarian', 'street food only', 'no seafood'"),
@@ -248,12 +248,16 @@ server.tool(
     if (!process.env.TAVILY_API_KEY) return error("TAVILY_API_KEY not configured.");
 
     const cacheKey = `itinerary:${city.toLowerCase()}:${(preferences ?? "").toLowerCase()}`;
-    const cached = getCache<{ stops: ItineraryStop[] }>(cacheKey);
+    const cached = getCache<{ stops: ItineraryStop[]; centerLat: number; centerLng: number }>(cacheKey);
 
     let stops: ItineraryStop[];
+    let centerLat: number;
+    let centerLng: number;
 
     if (cached) {
       stops = cached.stops;
+      centerLat = cached.centerLat;
+      centerLng = cached.centerLng;
     } else {
       try {
         // Search for cultural food context
@@ -274,7 +278,23 @@ server.tool(
           messages: [
             {
               role: "system",
-              content: `You are a local food historian and travel guide. Create a one-day taste itinerary for a traveler. Return a JSON object with a "stops" array. Each stop: timeSlot (one of: "Morning Coffee","Midday Snack","Dinner","Late Bites"), timeRange (string, e.g. "8:00–10:00 AM"), restaurantName (string), neighborhood (string), dish (string, the must-order item), dishDescription (string, 1 sentence plain-English explanation of what it is), culturalContext (string, 2 sentences on why this dish/place is deeply tied to the city's identity), walkingNote (string, 1 short sentence on the vibe of the neighborhood). Return ONLY valid JSON, no markdown.`,
+              content: `You are a local food historian, travel guide, and geocoding assistant. Create a one-day taste itinerary for a traveler. Return a JSON object with:
+- "centerLat" (number): latitude of the city center
+- "centerLng" (number): longitude of the city center
+- "stops" (array): each stop has:
+  - "timeSlot" (string): one of "Morning Coffee", "Midday Snack", "Dinner", "Late Bites"
+  - "timeRange" (string): e.g. "8:00–10:00 AM"
+  - "restaurantName" (string): restaurant name
+  - "neighborhood" (string): neighborhood or area
+  - "dish" (string): the must-order item
+  - "dishDescription" (string): 1 sentence plain-English explanation of what it is
+  - "culturalContext" (string): 2 sentences on why this dish/place is deeply tied to the city's identity
+  - "walkingNote" (string): 1 short sentence on the vibe of the neighborhood
+  - "lat" (number): estimated latitude of the restaurant based on city and neighborhood
+  - "lng" (number): estimated longitude of the restaurant based on city and neighborhood
+  - "imageQuery" (string): a short Unsplash search query for a photo of the dish (e.g. "espresso italian cafe")
+
+Spread the stops geographically across different neighborhoods. Return ONLY valid JSON, no markdown.`,
             },
             {
               role: "user",
@@ -285,8 +305,43 @@ server.tool(
         });
 
         const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
-        stops = (parsed.stops ?? []) as ItineraryStop[];
-        setCache(cacheKey, { stops });
+        centerLat = parsed.centerLat ?? 0;
+        centerLng = parsed.centerLng ?? 0;
+        const rawStops = (parsed.stops ?? []) as (ItineraryStop & { imageQuery?: string })[];
+
+        // Fetch Unsplash images for each stop's dish
+        stops = await Promise.all(
+          rawStops.map(async (stop) => {
+            let dishImageUrl = "";
+            if (process.env.UNSPLASH_ACCESS_KEY && stop.imageQuery) {
+              try {
+                const imgRes = await fetch(
+                  `https://api.unsplash.com/search/photos?query=${encodeURIComponent(stop.imageQuery)}&per_page=1&orientation=landscape`,
+                  { headers: { Authorization: `Client-ID ${process.env.UNSPLASH_ACCESS_KEY}` } }
+                );
+                const imgData = (await imgRes.json()) as { results?: { urls?: { small?: string } }[] };
+                dishImageUrl = imgData.results?.[0]?.urls?.small ?? "";
+              } catch {
+                // Unsplash fetch failed — proceed without image
+              }
+            }
+            return {
+              timeSlot: stop.timeSlot,
+              timeRange: stop.timeRange,
+              restaurantName: stop.restaurantName,
+              neighborhood: stop.neighborhood,
+              dish: stop.dish,
+              dishDescription: stop.dishDescription,
+              culturalContext: stop.culturalContext,
+              walkingNote: stop.walkingNote,
+              lat: stop.lat ?? 0,
+              lng: stop.lng ?? 0,
+              dishImageUrl,
+            };
+          })
+        );
+
+        setCache(cacheKey, { stops, centerLat, centerLng });
       } catch (err) {
         console.error("build-taste-itinerary error:", err);
         return error(`Failed to build itinerary for ${city}: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -294,8 +349,157 @@ server.tool(
     }
 
     return widget({
-      props: { city, preferences: preferences ?? "", stops },
+      props: { city, preferences: preferences ?? "", stops, centerLat, centerLng },
       output: text(`Taste itinerary for ${city}: ${stops.map((s) => `${s.timeSlot} → ${s.restaurantName} (${s.dish})`).join(" | ")}`),
+    });
+  }
+);
+
+// ─── TOOL 4: explore-city-food-map ───────────────────────────────────────────
+
+type DayItinerary = { day: number; label: string; stops: MapStop[] };
+
+server.tool(
+  {
+    name: "explore-city-food-map",
+    description:
+      "Generate an interactive map showing a food crawl route through a city, organized by day. Each pin is a restaurant with its signature dish, photo, and time slot. Supports multi-day trips with a day switcher. Use this when the user wants to visually explore food spots on a map.",
+    schema: z.object({
+      city: z.string().describe("The city to explore food in (e.g. 'Rome', 'Tokyo', 'Mexico City')"),
+      preferences: z.string().optional().describe("Optional dietary preferences or interests"),
+      days: z.number().min(1).max(3).optional().describe("Number of days to plan (1-3, default 1)"),
+    }),
+    widget: {
+      name: "city-food-map",
+      invoking: "Building your food map...",
+      invoked: "Food map ready",
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  async ({ city, preferences, days: numDays }) => {
+    if (!process.env.TAVILY_API_KEY) return error("TAVILY_API_KEY not configured.");
+    if (!process.env.OPENAI_API_KEY) return error("OPENAI_API_KEY not configured.");
+
+    const dayCount = numDays ?? 1;
+    const cacheKey = `foodmap:${city.toLowerCase()}:${(preferences ?? "").toLowerCase()}:${dayCount}d`;
+    const cached = getCache<{ stops: MapStop[]; days: DayItinerary[]; centerLat: number; centerLng: number }>(cacheKey);
+
+    let stops: MapStop[];
+    let days: DayItinerary[];
+    let centerLat: number;
+    let centerLng: number;
+
+    if (cached) {
+      stops = cached.stops;
+      days = cached.days;
+      centerLat = cached.centerLat;
+      centerLng = cached.centerLng;
+    } else {
+      try {
+        const prefNote = preferences ? ` focusing on ${preferences}` : "";
+
+        // Step 1: Search for restaurants
+        const searchResults = await getTavily().search(
+          `best local authentic restaurants food crawl in ${city}${prefNote}`,
+          { searchDepth: "advanced", maxResults: 10, includeAnswer: true }
+        );
+
+        const snippets = searchResults.results
+          .map((r) => `Title: ${r.title}\nURL: ${r.url}\nSnippet: ${r.content}`)
+          .join("\n\n");
+
+        // Step 2: Extract restaurants organized by day
+        const completion = await getOpenAI().chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: `You are a local food expert, travel planner, and geocoding assistant. Given search results about restaurants in a city, create a ${dayCount}-day food itinerary and return a JSON object with:
+- "centerLat" (number): latitude of the city center
+- "centerLng" (number): longitude of the city center
+- "days" (array of ${dayCount} objects): each day has:
+  - "day" (number): day number starting at 1
+  - "label" (string): a short thematic label like "Day 1 — Classic Flavors" or "Day 2 — Street Food Trail"
+  - "stops" (array of 4 objects): each stop has:
+    - "name" (string): restaurant name
+    - "neighborhood" (string): neighborhood or area
+    - "cuisineType" (string): type of cuisine
+    - "lat" (number): estimated latitude based on city + neighborhood
+    - "lng" (number): estimated longitude based on city + neighborhood
+    - "signatureDish" (string): the must-try dish
+    - "dishDescription" (string): 1-2 sentences explaining the dish
+    - "whyLocal" (string): 1 sentence on why locals love it
+    - "timeSlot" (string): one of "Morning Coffee", "Lunch", "Dinner", "Late Bites"
+    - "timeRange" (string): e.g. "8:00–10:00 AM"
+    - "imageQuery" (string): a short Unsplash search query for the dish photo
+
+Each day should have 4 stops (morning, lunch, dinner, late). Use different restaurants each day. Spread geographically. Return ONLY valid JSON, no markdown.`,
+            },
+            {
+              role: "user",
+              content: `City: ${city}${prefNote ? `\nPreferences: ${preferences}` : ""}\n\nSearch results:\n${snippets}`,
+            },
+          ],
+          response_format: { type: "json_object" },
+        });
+
+        const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
+        centerLat = parsed.centerLat ?? 0;
+        centerLng = parsed.centerLng ?? 0;
+        const rawDays = (parsed.days ?? []) as ({ day: number; label: string; stops: (MapStop & { imageQuery?: string })[] })[];
+
+        // Step 3: Fetch Unsplash images + build flat list
+        days = [];
+        stops = [];
+
+        for (const rawDay of rawDays) {
+          const dayStops: MapStop[] = await Promise.all(
+            (rawDay.stops ?? []).map(async (stop) => {
+              let dishImageUrl = "";
+              if (process.env.UNSPLASH_ACCESS_KEY && stop.imageQuery) {
+                try {
+                  const imgRes = await fetch(
+                    `https://api.unsplash.com/search/photos?query=${encodeURIComponent(stop.imageQuery)}&per_page=1&orientation=landscape`,
+                    { headers: { Authorization: `Client-ID ${process.env.UNSPLASH_ACCESS_KEY}` } }
+                  );
+                  const imgData = (await imgRes.json()) as { results?: { urls?: { small?: string } }[] };
+                  dishImageUrl = imgData.results?.[0]?.urls?.small ?? "";
+                } catch {
+                  // Unsplash fetch failed
+                }
+              }
+              return {
+                name: stop.name,
+                neighborhood: stop.neighborhood,
+                cuisineType: stop.cuisineType,
+                lat: stop.lat,
+                lng: stop.lng,
+                signatureDish: stop.signatureDish,
+                dishDescription: stop.dishDescription,
+                dishImageUrl,
+                whyLocal: stop.whyLocal ?? "",
+                timeSlot: stop.timeSlot ?? "",
+                timeRange: stop.timeRange ?? "",
+              };
+            })
+          );
+
+          days.push({ day: rawDay.day, label: rawDay.label, stops: dayStops });
+          stops.push(...dayStops);
+        }
+
+        setCache(cacheKey, { stops, days, centerLat, centerLng });
+      } catch (err) {
+        console.error("explore-city-food-map error:", err);
+        return error(`Failed to build food map for ${city}: ${err instanceof Error ? err.message : "Unknown error"}`);
+      }
+    }
+
+    return widget({
+      props: { city, centerLat, centerLng, stops, days },
+      output: text(
+        `Food map for ${city} (${days.length} day${days.length > 1 ? "s" : ""}) with ${stops.length} stops: ${stops.map((s, i) => `${i + 1}. ${s.name} (${s.signatureDish})`).join(", ")}`
+      ),
     });
   }
 );
@@ -328,8 +532,26 @@ export type ItineraryStop = {
   dishDescription: string;
   culturalContext: string;
   walkingNote: string;
+  lat: number;
+  lng: number;
+  dishImageUrl: string;
+};
+
+export type MapStop = {
+  name: string;
+  neighborhood: string;
+  cuisineType: string;
+  lat: number;
+  lng: number;
+  signatureDish: string;
+  dishDescription: string;
+  dishImageUrl: string;
+  whyLocal: string;
+  timeSlot?: string;
+  timeRange?: string;
 };
 
 server.listen().then(() => {
   console.log("CityBites MCP server running");
 });
+

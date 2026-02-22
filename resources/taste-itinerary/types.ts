@@ -9,12 +9,17 @@ export const stopSchema = z.object({
   dishDescription: z.string().describe("Plain-English explanation of the dish"),
   culturalContext: z.string().describe("Why this dish/place is tied to the city's identity"),
   walkingNote: z.string().describe("Vibe of the neighborhood"),
+  lat: z.number().describe("Latitude of the restaurant"),
+  lng: z.number().describe("Longitude of the restaurant"),
+  dishImageUrl: z.string().describe("Unsplash image URL for the dish, or empty string"),
 });
 
 export const propSchema = z.object({
   city: z.string().describe("The city"),
   preferences: z.string().describe("User preferences if any"),
   stops: z.array(stopSchema).describe("The itinerary stops"),
+  centerLat: z.number().describe("Map center latitude"),
+  centerLng: z.number().describe("Map center longitude"),
 });
 
 export type TasteItineraryProps = z.infer<typeof propSchema>;
