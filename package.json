@@ -55,6 +55,7 @@
     "lodash": "4.17.23"
   },
   "optionalDependencies": {
-    "@rollup/rollup-linux-x64-musl": "^4.0.0"
+    "@rollup/rollup-linux-x64-musl": "^4.0.0",
+    "lightningcss-linux-x64-musl": "^1.0.0"
   }
 }
