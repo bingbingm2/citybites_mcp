@@ -350,6 +350,7 @@ export default function TasteItinerary() {
   const { props, isPending } = useWidget<TasteItineraryProps>();
   const colors = useColors();
   const { callTool: getMenuDishes, isPending: isMenuLoading } = useCallTool("get-menu-dishes");
+  const { callTool: exploreFoodMap, isPending: isMapLoading } = useCallTool("explore-city-food-map");
   const [loadingStop, setLoadingStop] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
 
@@ -435,6 +436,30 @@ export default function TasteItinerary() {
           <div style={{ textAlign: "center", padding: 40, color: colors.textSecondary }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>🗺️</div>
             <p style={{ margin: 0 }}>No stops found for this itinerary.</p>
+          </div>
+        )}
+
+        {/* Footer CTA — explore on food map */}
+        {stops.length > 0 && (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${colors.border}`, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={() => exploreFoodMap({ city })}
+              disabled={isMapLoading}
+              style={{
+                padding: "9px 16px",
+                backgroundColor: colors.accentLight,
+                color: colors.accent,
+                border: `1px solid ${colors.accent}30`,
+                borderRadius: 10,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: isMapLoading ? "not-allowed" : "pointer",
+                opacity: isMapLoading ? 0.6 : 1,
+                transition: "opacity 0.15s",
+              }}
+            >
+              {isMapLoading ? "Building food map…" : "🗺️ Explore on the food map"}
+            </button>
           </div>
         )}
       </div>

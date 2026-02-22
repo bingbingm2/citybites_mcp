@@ -138,9 +138,10 @@ const RestaurantCard: React.FC<{
 };
 
 const RestaurantSpots: React.FC = () => {
-  const { props, isPending, sendFollowUpMessage } = useWidget<RestaurantProps>();
+  const { props, isPending } = useWidget<RestaurantProps>();
   const colors = useColors();
   const { callTool: getMenuDishes, isPending: isMenuLoading } = useCallTool("get-menu-dishes");
+  const { callTool: buildItinerary, isPending: isItineraryLoading } = useCallTool("build-taste-itinerary");
   const [loadingRestaurant, setLoadingRestaurant] = useState<string | null>(null);
 
   if (isPending) {
@@ -205,7 +206,8 @@ const RestaurantSpots: React.FC = () => {
         {/* Footer CTA */}
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${colors.border}`, display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
-            onClick={() => sendFollowUpMessage(`Build me a full day taste itinerary in ${city}`)}
+            onClick={() => buildItinerary({ city })}
+            disabled={isItineraryLoading}
             style={{
               padding: "9px 16px",
               backgroundColor: colors.accentLight,
@@ -214,10 +216,12 @@ const RestaurantSpots: React.FC = () => {
               borderRadius: 10,
               fontSize: 13,
               fontWeight: 600,
-              cursor: "pointer",
+              cursor: isItineraryLoading ? "not-allowed" : "pointer",
+              opacity: isItineraryLoading ? 0.6 : 1,
+              transition: "opacity 0.15s",
             }}
           >
-            🗺️ Build my taste itinerary
+            {isItineraryLoading ? "Building itinerary…" : "🗺️ Build my taste itinerary"}
           </button>
         </div>
       </div>
