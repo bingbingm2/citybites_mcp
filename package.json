@@ -53,5 +53,8 @@
   "overrides": {
     "sugarss": "^5.0.1",
     "lodash": "4.17.23"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-linux-x64-musl": "^4.0.0"
   }
 }
