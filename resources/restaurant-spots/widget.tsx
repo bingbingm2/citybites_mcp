@@ -1,4 +1,4 @@
-import { McpUseProvider, useWidget, useWidgetTheme, type WidgetMetadata } from "mcp-use/react";
+import { McpUseProvider, useWidget, useWidgetTheme, useCallTool, type WidgetMetadata } from "mcp-use/react";
 import React, { useState } from "react";
 import { propSchema, type RestaurantProps, type Restaurant } from "./types";
 
@@ -33,8 +33,9 @@ const RestaurantCard: React.FC<{
   restaurant: Restaurant;
   index: number;
   colors: ReturnType<typeof useColors>;
-  onGetMenu: (restaurant: Restaurant) => void;
-}> = ({ restaurant, index, colors, onGetMenu }) => {
+  onGetMenu: (r: Restaurant) => void;
+  isLoading: boolean;
+}> = ({ restaurant, index, colors, onGetMenu, isLoading }) => {
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -95,6 +96,7 @@ const RestaurantCard: React.FC<{
       <div style={{ display: "flex", gap: 8, marginTop: 4, alignItems: "center" }}>
         <button
           onClick={() => onGetMenu(restaurant)}
+          disabled={isLoading}
           style={{
             flex: 1,
             padding: "8px 12px",
@@ -104,11 +106,12 @@ const RestaurantCard: React.FC<{
             borderRadius: 10,
             fontSize: 12,
             fontWeight: 600,
-            cursor: "pointer",
+            cursor: isLoading ? "not-allowed" : "pointer",
+            opacity: isLoading ? 0.6 : 1,
             transition: "opacity 0.15s",
           }}
         >
-          See what to order →
+          {isLoading ? "Loading menu..." : "See what to order →"}
         </button>
         {restaurant.url && (
           <a
@@ -137,6 +140,8 @@ const RestaurantCard: React.FC<{
 const RestaurantSpots: React.FC = () => {
   const { props, isPending, sendFollowUpMessage } = useWidget<RestaurantProps>();
   const colors = useColors();
+  const { callTool: getMenuDishes, isPending: isMenuLoading } = useCallTool("get-menu-dishes");
+  const [loadingRestaurant, setLoadingRestaurant] = useState<string | null>(null);
 
   if (isPending) {
     return (
@@ -158,7 +163,11 @@ const RestaurantSpots: React.FC = () => {
   const { city, restaurants } = props;
 
   const handleGetMenu = (restaurant: Restaurant) => {
-    sendFollowUpMessage(`Show me what to order at ${restaurant.name} in ${city}`);
+    setLoadingRestaurant(restaurant.name);
+    getMenuDishes(
+      { restaurantName: restaurant.name, city, url: restaurant.url },
+      { onSettled: () => setLoadingRestaurant(null) }
+    );
   };
 
   return (
@@ -188,6 +197,7 @@ const RestaurantSpots: React.FC = () => {
               index={i}
               colors={colors}
               onGetMenu={handleGetMenu}
+              isLoading={loadingRestaurant === r.name && isMenuLoading}
             />
           ))}
         </div>
