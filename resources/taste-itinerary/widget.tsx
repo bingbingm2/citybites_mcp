@@ -1,4 +1,4 @@
-import { McpUseProvider, useWidget, useWidgetTheme, useCallTool, type WidgetMetadata } from "mcp-use/react";
+import { McpUseProvider, useWidget, useWidgetTheme, type WidgetMetadata } from "mcp-use/react";
 import React, { useState, useEffect, useRef } from "react";
 import { propSchema, type TasteItineraryProps, type ItineraryStop } from "./types";
 
@@ -203,9 +203,8 @@ const StopCard: React.FC<{
   colors: ReturnType<typeof useColors>;
   isHighlighted: boolean;
   onGetMenu: (stop: ItineraryStop) => void;
-  isLoading: boolean;
   onHover: (index: number | null) => void;
-}> = ({ stop, index, isLast, colors, isHighlighted, onGetMenu, isLoading, onHover }) => {
+}> = ({ stop, index, isLast, colors, isHighlighted, onGetMenu, onHover }) => {
   const [expanded, setExpanded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const slotColor = SLOT_COLORS[stop.timeSlot] ?? "#d4622a";
@@ -322,7 +321,6 @@ const StopCard: React.FC<{
         {/* Get menu button */}
         <button
           onClick={() => onGetMenu(stop)}
-          disabled={isLoading}
           style={{
             width: "100%",
             padding: "7px 0",
@@ -332,12 +330,11 @@ const StopCard: React.FC<{
             borderRadius: 8,
             fontSize: 12,
             fontWeight: 600,
-            cursor: isLoading ? "not-allowed" : "pointer",
-            opacity: isLoading ? 0.6 : 1,
+            cursor: "pointer",
             transition: "opacity 0.15s",
           }}
         >
-          {isLoading ? "Loading menu…" : "Full menu →"}
+          Full menu →
         </button>
       </div>
     </div>
@@ -347,10 +344,8 @@ const StopCard: React.FC<{
 // ── Main Widget ──────────────────────────────────────────────────────────────
 
 export default function TasteItinerary() {
-  const { props, isPending } = useWidget<TasteItineraryProps>();
+  const { props, isPending, sendFollowUpMessage } = useWidget<TasteItineraryProps>();
   const colors = useColors();
-  const { callTool: getMenuDishes, isPending: isMenuLoading } = useCallTool("get-menu-dishes");
-  const [loadingStop, setLoadingStop] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
 
   if (isPending) {
@@ -375,11 +370,11 @@ export default function TasteItinerary() {
   const { city, stops, centerLat, centerLng } = props;
 
   const handleGetMenu = (stop: ItineraryStop) => {
-    setLoadingStop(stop.restaurantName);
-    getMenuDishes(
-      { restaurantName: stop.restaurantName, city },
-      { onSettled: () => setLoadingStop(null) }
-    );
+    sendFollowUpMessage(`Show me the full menu for ${stop.restaurantName} in ${city}`);
+  };
+
+  const handleExploreMap = () => {
+    sendFollowUpMessage(`Show me a food map for ${city}`);
   };
 
   return (
@@ -425,11 +420,30 @@ export default function TasteItinerary() {
               colors={colors}
               isHighlighted={highlightedIndex === i}
               onGetMenu={handleGetMenu}
-              isLoading={loadingStop === stop.restaurantName && isMenuLoading}
               onHover={setHighlightedIndex}
             />
           ))}
         </div>
+
+        {/* Explore on map button */}
+        <button
+          onClick={handleExploreMap}
+          style={{
+            width: "100%",
+            marginTop: 16,
+            padding: "12px 0",
+            background: "linear-gradient(135deg, #d4622a 0%, #8b3a62 100%)",
+            color: "#fff",
+            border: "none",
+            borderRadius: 12,
+            fontSize: 14,
+            fontWeight: 700,
+            cursor: "pointer",
+            letterSpacing: "0.02em",
+          }}
+        >
+          🗺️ Explore {city} on a food map
+        </button>
 
         {stops.length === 0 && (
           <div style={{ textAlign: "center", padding: 40, color: colors.textSecondary }}>
