@@ -354,6 +354,8 @@ export default function TasteItinerary() {
   const [loadingStop, setLoadingStop] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
 
+  // a widget to display the itinerary
+  
   if (isPending) {
     return (
       <McpUseProvider autoSize>
