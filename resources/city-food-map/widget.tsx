@@ -70,9 +70,11 @@ const LeafletMap: React.FC<{
   colors: ReturnType<typeof useColors>;
   onStopClick: (index: number) => void;
   dayColor?: string;
-}> = ({ stops, centerLat, centerLng, colors, onStopClick, dayColor }) => {
+  userLoc: { lat: number; lng: number } | null;
+}> = ({ stops, centerLat, centerLng, colors, onStopClick, dayColor, userLoc }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
+  const userMarkerRef = useRef<any>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -179,8 +181,36 @@ const LeafletMap: React.FC<{
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      userMarkerRef.current = null;
     };
   }, [loaded, stops, centerLat, centerLng, dayColor]);
+
+  // Update user location marker
+  useEffect(() => {
+    if (!loaded || !mapInstanceRef.current) return;
+    const L = (window as any).L;
+
+    if (userMarkerRef.current) {
+      mapInstanceRef.current.removeLayer(userMarkerRef.current);
+    }
+
+    if (userLoc) {
+      const userIcon = L.divIcon({
+        className: "citybites-user-marker",
+        html: `<div style="
+          width:16px;height:16px;border-radius:50%;
+          background:#2563eb;border:2px solid #fff;
+          box-shadow:0 0 0 4px rgba(37,99,235,0.3);
+          animation: pulse-user 2s infinite;
+        "></div>
+        <style>@keyframes pulse-user { 0% { box-shadow:0 0 0 0 rgba(37,99,235,0.4) } 70% { box-shadow:0 0 0 10px rgba(37,99,235,0) } 100% { box-shadow:0 0 0 0 rgba(37,99,235,0) } }</style>`,
+        iconSize: [16, 16],
+        iconAnchor: [8, 8],
+      });
+      userMarkerRef.current = L.marker([userLoc.lat, userLoc.lng], { icon: userIcon, zIndexOffset: 1000 }).addTo(mapInstanceRef.current);
+      mapInstanceRef.current.panTo([userLoc.lat, userLoc.lng]);
+    }
+  }, [userLoc, loaded]);
 
   return (
     <div
@@ -381,6 +411,9 @@ const CityFoodMap: React.FC = () => {
   const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
   const [loadingStop, setLoadingStop] = useState<string | null>(null);
   const [activeDay, setActiveDay] = useState<number | null>(null);
+  const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
+  const [locLoading, setLocLoading] = useState(false);
+  const [connError, setConnError] = useState(false);
 
   if (isPending) {
     return (
@@ -425,7 +458,25 @@ const CityFoodMap: React.FC = () => {
     setLoadingStop(stop.name);
     getMenuDishes(
       { restaurantName: stop.name, city },
-      { onSettled: () => setLoadingStop(null) }
+      { 
+        onSettled: () => setLoadingStop(null),
+        onError: (err: any) => {
+          if (err.message?.includes("not initialized")) setConnError(true);
+        }
+      }
+    );
+  };
+
+  const handleLocate = () => {
+    if (!navigator.geolocation) return;
+    setLocLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocLoading(false);
+      },
+      () => setLocLoading(false),
+      { enableHighAccuracy: true }
     );
   };
 
@@ -453,7 +504,7 @@ const CityFoodMap: React.FC = () => {
         )}
 
         {/* Map */}
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 16, position: "relative" }}>
           <LeafletMap
             stops={activeStops}
             centerLat={centerLat}
@@ -461,8 +512,57 @@ const CityFoodMap: React.FC = () => {
             colors={colors}
             onStopClick={setHighlightedIndex}
             dayColor={activeDayColor}
+            userLoc={userLoc}
           />
+          {/* Locate Me Button Overlay */}
+          <button
+            onClick={handleLocate}
+            disabled={locLoading}
+            title="Show my current location"
+            style={{
+              position: "absolute",
+              top: 10,
+              right: 10,
+              zIndex: 1000,
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              backgroundColor: colors.card,
+              border: `1px solid ${colors.border}`,
+              color: userLoc ? "#2563eb" : colors.textSecondary,
+              fontSize: 18,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.1)",
+            }}
+          >
+            {locLoading ? "⏳" : "🎯"}
+          </button>
         </div>
+
+        {/* Connection Error Warning */}
+        {connError && (
+          <div style={{
+            marginBottom: 16,
+            padding: "12px 16px",
+            backgroundColor: "#fee2e2",
+            border: "1px solid #ef444430",
+            borderRadius: 12,
+            color: "#b91c1c",
+            fontSize: 13,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}>
+            <div style={{ fontWeight: 700 }}>⚠️ Connection lost</div>
+            <div style={{ lineHeight: 1.4 }}>
+              The server session was lost (common during development hot-reloads). 
+              Please <strong>refresh the entire page</strong> to restore connectivity.
+            </div>
+          </div>
+        )}
 
         {/* Card strip */}
         <div style={{

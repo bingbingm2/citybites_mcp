@@ -70,11 +70,13 @@ const LeafletMap: React.FC<{
   centerLng: number;
   colors: ReturnType<typeof useColors>;
   highlightedIndex: number | null;
+  userLoc: { lat: number; lng: number } | null;
   onStopClick: (index: number) => void;
-}> = ({ stops, centerLat, centerLng, colors, highlightedIndex, onStopClick }) => {
+}> = ({ stops, centerLat, centerLng, colors, highlightedIndex, userLoc, onStopClick }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
+  const userMarkerRef = useRef<any>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -170,8 +172,36 @@ const LeafletMap: React.FC<{
       map.remove();
       mapInstanceRef.current = null;
       markersRef.current = [];
+      userMarkerRef.current = null;
     };
   }, [loaded, stops, centerLat, centerLng]);
+
+  // Update user location marker
+  useEffect(() => {
+    if (!loaded || !mapInstanceRef.current) return;
+    const L = (window as any).L;
+
+    if (userMarkerRef.current) {
+      mapInstanceRef.current.removeLayer(userMarkerRef.current);
+    }
+
+    if (userLoc) {
+      const userIcon = L.divIcon({
+        className: "citybites-user-marker",
+        html: `<div style="
+          width:16px;height:16px;border-radius:50%;
+          background:#2563eb;border:2px solid #fff;
+          box-shadow:0 0 0 4px rgba(37,99,235,0.3);
+          animation: pulse-user 2s infinite;
+        "></div>
+        <style>@keyframes pulse-user { 0% { box-shadow:0 0 0 0 rgba(37,99,235,0.4) } 70% { box-shadow:0 0 0 10px rgba(37,99,235,0) } 100% { box-shadow:0 0 0 0 rgba(37,99,235,0) } }</style>`,
+        iconSize: [16, 16],
+        iconAnchor: [8, 8],
+      });
+      userMarkerRef.current = L.marker([userLoc.lat, userLoc.lng], { icon: userIcon, zIndexOffset: 1000 }).addTo(mapInstanceRef.current);
+      mapInstanceRef.current.panTo([userLoc.lat, userLoc.lng]);
+    }
+  }, [userLoc, loaded]);
 
   // Open popup when highlighted from timeline
   useEffect(() => {
@@ -353,6 +383,9 @@ export default function TasteItinerary() {
   const { callTool: exploreFoodMap, isPending: isMapLoading } = useCallTool("explore-city-food-map");
   const [loadingStop, setLoadingStop] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
+  const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
+  const [locLoading, setLocLoading] = useState(false);
+  const [connError, setConnError] = useState(false);
 
   // a widget to display the itinerary
   
@@ -381,7 +414,36 @@ export default function TasteItinerary() {
     setLoadingStop(stop.restaurantName);
     getMenuDishes(
       { restaurantName: stop.restaurantName, city },
-      { onSettled: () => setLoadingStop(null) }
+      { 
+        onSettled: () => setLoadingStop(null),
+        onError: (err: any) => {
+          if (err.message?.includes("not initialized")) setConnError(true);
+        }
+      }
+    );
+  };
+
+  const handleExploreMap = () => {
+    exploreFoodMap(
+      { city },
+      {
+        onError: (err: any) => {
+          if (err.message?.includes("not initialized")) setConnError(true);
+        }
+      }
+    );
+  };
+
+  const handleLocate = () => {
+    if (!navigator.geolocation) return;
+    setLocLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocLoading(false);
+      },
+      () => setLocLoading(false),
+      { enableHighAccuracy: true }
     );
   };
 
@@ -405,15 +467,64 @@ export default function TasteItinerary() {
 
         {/* Route Map */}
         {centerLat !== 0 && centerLng !== 0 && (
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 16, position: "relative" }}>
             <LeafletMap
               stops={stops}
               centerLat={centerLat}
               centerLng={centerLng}
               colors={colors}
               highlightedIndex={highlightedIndex}
+              userLoc={userLoc}
               onStopClick={setHighlightedIndex}
             />
+            {/* Locate Me Button Overlay */}
+            <button
+              onClick={handleLocate}
+              disabled={locLoading}
+              title="Show my current location"
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                zIndex: 1000,
+                width: 36,
+                height: 36,
+                borderRadius: 8,
+                backgroundColor: colors.card,
+                border: `1px solid ${colors.border}`,
+                color: userLoc ? "#2563eb" : colors.textSecondary,
+                fontSize: 18,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                boxShadow: "0 2px 6px rgba(0,0,0,0.1)",
+              }}
+            >
+              {locLoading ? "⏳" : "🎯"}
+            </button>
+          </div>
+        )}
+
+        {/* Connection Error Warning */}
+        {connError && (
+          <div style={{
+            marginBottom: 16,
+            padding: "12px 16px",
+            backgroundColor: "#fee2e2",
+            border: "1px solid #ef444430",
+            borderRadius: 12,
+            color: "#b91c1c",
+            fontSize: 13,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}>
+            <div style={{ fontWeight: 700 }}>⚠️ Connection lost</div>
+            <div style={{ lineHeight: 1.4 }}>
+              The server session was lost (common during development hot-reloads). 
+              Please <strong>refresh the entire page</strong> to restore connectivity.
+            </div>
           </div>
         )}
 
@@ -445,7 +556,7 @@ export default function TasteItinerary() {
         {stops.length > 0 && (
           <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${colors.border}`, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
-              onClick={() => exploreFoodMap({ city })}
+              onClick={handleExploreMap}
               disabled={isMapLoading}
               style={{
                 padding: "9px 16px",
